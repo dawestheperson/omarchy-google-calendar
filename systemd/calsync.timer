@@ -1,0 +1,12 @@
+[Unit]
+Description=Google Calendar sync: daily, and shortly after login
+Documentation=https://github.com/dawestheperson/omarchy-google-calendar
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+OnStartupSec=1min
+Unit=calsync.service
+
+[Install]
+WantedBy=timers.target

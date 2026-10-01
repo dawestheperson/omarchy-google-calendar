@@ -1,0 +1,139 @@
+#!/bin/bash
+# Health check for the Google Calendar bar plugin, in plain English.
+# Exits 0 when everything is healthy, 1 otherwise.
+#
+#   calsync-doctor          check
+#   calsync-doctor --sync   start a sync first, then check
+
+set -uo pipefail
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/calsync"
+BIN="$(dirname "$(readlink -f "$0")")"
+REPO="$(dirname "$BIN")"
+fixes=()
+bad=0
+
+section() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+ok() { echo "  ok    $*"; }
+warn() { echo "  WARN  $*"; }
+fail() { echo "  FAIL  $*"; bad=1; }
+fix() { local f; for f in "${fixes[@]}"; do [[ $f == "$*" ]] && return; done; fixes+=("$*"); }
+
+if [[ ${1:-} == --sync ]]; then
+  echo "Starting a sync…"
+  systemctl --user start calsync.service
+fi
+
+section "Google login (gcalcli)"
+if ! command -v gcalcli >/dev/null; then
+  fail "gcalcli is not installed"
+  fix "Install it: omarchy pkg aur add gcalcli"
+elif out=$(timeout 30 gcalcli list 2>&1) && grep -q owner <<<"$out"; then
+  ok "gcalcli is signed in ($(grep -c -E 'owner|writer|reader' <<<"$out") calendars visible)"
+else
+  if ! getent hosts www.googleapis.com >/dev/null 2>&1; then
+    warn "offline, so the login could not be checked"
+  else
+    fail "gcalcli cannot reach your calendars: $(tail -n 1 <<<"$out")"
+    fix "Sign in again: run \`gcalcli init\` in a terminal and approve in the browser (Advanced → Go to gcalcli → Continue)."
+    fix "If Google says the app is blocked or in testing: in console.cloud.google.com, open your project → Google Auth Platform → Audience, which must say 'In production' (see GOOGLE_SETUP.md)."
+  fi
+fi
+oauth="${XDG_DATA_HOME:-$HOME/.local/share}/gcalcli/oauth"
+if [[ -f $oauth && $(stat -c %a "$oauth") != 600 ]]; then
+  warn "the gcalcli token is readable by other users"
+  fix "chmod 600 $oauth"
+fi
+
+section "Last sync"
+now=$(date +%s)
+last=$(cat "$STATE/last-success" 2>/dev/null || echo 0)
+state=$(jq -r '.state // "unknown"' "$STATE/status.json" 2>/dev/null || echo none)
+message=$(jq -r '.message // ""' "$STATE/status.json" 2>/dev/null)
+if ((last == 0)); then
+  fail "never synced successfully"
+  fix "Run: systemctl --user start calsync.service   then: journalctl --user -u calsync -n 20"
+else
+  age=$((now - last))
+  hours=$((age / 3600))
+  when="$(date -d "@$last" '+%a %b %-d %-I:%M %p') (${hours}h ago)"
+  if ((age > 36 * 3600)); then
+    fail "last successful sync was $when — the bar shows ⚠"
+    fix "Run: systemctl --user start calsync.service, then re-run calsync-doctor to see why it fails."
+  else
+    ok "last successful sync $when"
+  fi
+fi
+case $state in
+ok) ok "last attempt succeeded" ;;
+offline) warn "last attempt was offline; it retries when the network comes back ($message)" ;;
+auth) fail "last attempt failed to log in: $message"; fix "Run \`gcalcli init\` (see Google login above)." ;;
+error) fail "last attempt failed: $message"; fix "See the recent sync log below. Try \`$BIN/calsync-fetch\` directly to see the full error." ;;
+*) warn "no status recorded yet" ;;
+esac
+if [[ -e $STATE/simulate ]]; then
+  fail "a simulated failure is switched on ($(cat "$STATE/simulate"))"
+  fix "rm $STATE/simulate   (left over from testing)"
+fi
+if [[ -r $STATE/events.json ]] && jq -e '.events' "$STATE/events.json" >/dev/null 2>&1; then
+  ok "cache holds $(jq '.events | length' "$STATE/events.json") events, $(jq -r '.range.first + " to " + .range.last' "$STATE/events.json")"
+else
+  fail "the cache $STATE/events.json is missing or unreadable"
+  fix "Run: systemctl --user start calsync.service"
+fi
+
+section "Timers and hooks"
+if systemctl --user is-active --quiet calsync.timer; then
+  next=$(systemctl --user show calsync.timer -p NextElapseUSecRealtime --value)
+  ok "calsync.timer is active (next daily run: ${next:-unknown})"
+else
+  fail "calsync.timer is not running, so the daily sync is off"
+  fix "Run: systemctl --user enable --now calsync.timer   (or re-run $REPO/install.sh)"
+fi
+if systemctl --user is-failed --quiet calsync.service; then
+  warn "calsync.service is in the failed state from its last run"
+fi
+reminders=$(systemctl --user list-timers --all --plain --no-legend 'calsync-rem-*' 2>/dev/null | wc -l)
+ok "$reminders reminder timer(s) armed for the next 48h"
+if [[ -x /etc/NetworkManager/dispatcher.d/90-calsync ]]; then
+  ok "network-online hook installed"
+elif ! systemctl is-enabled --quiet NetworkManager 2>/dev/null; then
+  ok "network-online hook not used (this system does not run NetworkManager)"
+else
+  warn "optional network-online hook not installed (no sync when you reconnect)"
+  fix "Optional: sudo $REPO/root/install-root.sh"
+fi
+if systemctl is-enabled --quiet calsync-resume.service 2>/dev/null; then
+  ok "wake-from-sleep hook installed"
+else
+  warn "optional wake-from-sleep hook not installed (no sync after suspend)"
+  fix "Optional: sudo $REPO/root/install-root.sh"
+fi
+if [[ -x $HOME/.config/omarchy/hooks/post-update.d/calsync-check ]]; then
+  ok "Omarchy post-update check installed"
+else
+  warn "Omarchy post-update check missing"
+  fix "Re-run $REPO/install.sh"
+fi
+
+section "Bar plugin"
+if ! "$BIN/calsync-check-plugin"; then
+  bad=1
+  fix "Reinstall the plugin: $REPO/install.sh   (then: omarchy restart shell)"
+  fix "Shell errors: journalctl --user -b | grep -i -E 'dawestheperson.gcal|qml' | tail"
+fi
+
+section "Recent sync log"
+journalctl --user -u calsync.service -u "calsync@*" -n 8 --no-pager -o short 2>/dev/null |
+  sed 's/^/  /' || tail -n 8 "$STATE/calsync.log" | sed 's/^/  /'
+
+echo
+if ((${#fixes[@]})); then
+  printf '\033[1mHow to fix\033[0m\n'
+  for f in "${fixes[@]}"; do echo "  • $f"; done
+  echo
+fi
+if ((bad)); then
+  echo "Calendar sync: NOT healthy. Architecture and more fixes: $REPO/NOTES.md"
+  exit 1
+fi
+echo "Calendar sync: healthy."

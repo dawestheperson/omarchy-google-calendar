@@ -1,0 +1,9 @@
+[Unit]
+Description=Google Calendar sync if the last success is older than %i seconds
+Documentation=https://github.com/dawestheperson/omarchy-google-calendar
+OnFailure=calsync-failed.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/calsync --if-stale %i
+TimeoutStartSec=180

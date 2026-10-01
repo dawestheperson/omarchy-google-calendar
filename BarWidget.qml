@@ -1,0 +1,648 @@
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import qs.Commons
+import qs.Ui
+import "Model.js" as Model
+import "Calendar.js" as Cal
+// The calendar service this reads: Google, through the local cache. A
+// second is a file in backends/ and the choice of which module this is.
+import "backends/Gcal.js" as Backend
+
+// Date/time label for the bar, and the host for the calendar popup.
+//
+// Left click reveals the calendar — asking "what is the date?" is what a
+// click on a clock means — right click walks the common label formats, and
+// middle click opens the timezone picker.
+//
+// This is Omarchy's stock clock, and it also owns the calendar the popup
+// draws: the weeks on screen, the calendars, the time track under way, and
+// the reminders. It owns them rather than the panel because reminders have
+// to fire with the panel closed. Everything it knows about the calendar
+// service comes through Backend; everything it computes, through Cal.
+BarWidget {
+  id: root
+  moduleName: "dawestheperson.gcal"
+
+  property date displayDate: clock.date
+
+  readonly property string configuredFormat: vertical
+    ? setting("verticalFormat", "HH\n—\nmm")
+    : setting("format", "dddd HH:mm")
+  readonly property string configuredAltFormat: vertical
+    ? setting("verticalFormatAlt", "dd\nMMM\n'W'ww\n''yy")
+    : setting("formatAlt", "d MMMM 'W'ww yyyy")
+
+  readonly property var formatRing: Model.clockFormatRing(configuredFormat, configuredAltFormat, Model.clockFormats(vertical))
+
+  // What the bar shows is what shell.json stores, so a cycled format is the
+  // format from then on rather than something that reverts on restart.
+  readonly property string activeFormat: configuredFormat
+  readonly property string dateText: formatted(displayDate)
+  readonly property string calendarGlyph: "󰃭"
+  // The event the bar names in front of the clock, as the macOS menu-bar
+  // calendars do. Horizontal bars only: a vertical one has no room.
+  readonly property string barEventMode: String(setting("barEvent", "upcoming"))
+  // Every event inside its alert window (from its earliest reminder
+  // until it ends), most pressing first; the bar names the first and counts
+  // the rest.
+  readonly property var shownEvents: Cal.barSelection(barEventMode, events, todayEvents, displayDate.getTime(), alertLeadMinutes)
+  readonly property string eventText: Cal.barLabel(shownEvents, displayDate.getTime(), hour24, barEventMode)
+  readonly property string displayText: (syncStale ? "⚠ " : "") + (eventText !== ""
+    ? calendarGlyph + " " + eventText + "   " + dateText
+    : (alerting ? calendarGlyph + "  " + dateText : dateText))
+  // Vertical bars stack one line per icon slot, so the glyph takes a line of
+  // its own rather than being crammed onto the hour.
+  readonly property var verticalLines: alerting
+    ? [calendarGlyph].concat(dateText.split("\n"))
+    : dateText.split("\n")
+
+  // ---- Calendar settings
+  readonly property int alertLeadMinutes: Cal.normalizedAlertLead(setting("alertLeadMinutes", 15))
+  readonly property int refreshIntervalSec: Cal.normalizedRefreshInterval(setting("refreshIntervalSec", 300))
+  // Reminders are systemd timers armed by calsync (sync/calsync-reminders),
+  // so they fire whether or not the shell is up; the shell's own loop is off.
+  readonly property bool notificationsEnabled: false
+  readonly property string timeFormat: String(setting("timeFormat", "auto"))
+  readonly property var hiddenCalendars: Cal.parseHiddenCalendars(setting("hiddenCalendars", []))
+  onHiddenCalendarsChanged: rebuildIndex()
+  // Whether a place writes half past four as 16:30 or 4:30pm is a regional
+  // convention, so "auto" reads it off the locale.
+  readonly property bool hour24: Cal.prefersHour24(timeFormat, setting("format", "dddd HH:mm"),
+    Qt.locale().timeFormat(Locale.ShortFormat))
+
+  // ---- Calendar state, read by the panel.
+  //
+  // Weeks are cached by their Monday. `events` is every cached week merged,
+  // and `byDay` the same events indexed by the days they touch, which is
+  // what both the month grid and the day view read.
+  property var weekCache: ({})
+  // The backend, and how its probe said to read it ("cache" once gcalcli
+  // is found), or "" until
+  // the probe has answered, or when it never will. Nothing is fetched until
+  // this is known.
+  readonly property string backendName: Backend.info.name
+  readonly property var capabilities: Backend.info.capabilities
+  property string backendMode: ""
+  property string backendVersion: ""
+  property bool backendChecked: false
+  property var events: []
+  property var byDay: ({})
+  property var calendars: []
+  readonly property var writableCalendars: Cal.writableCalendars(calendars)
+  property bool loading: false
+  // "Nothing on today" and "we have not looked yet" are the same empty list
+  // and very different things to put on screen.
+  property bool loaded: false
+  property string lastError: ""
+  // The weeks the panel is showing, so a refresh re-reads what is on screen.
+  property var visibleWeeks: []
+  property var queuedWeeks: []
+  property var fetchingWeeks: []
+
+  readonly property string todayKey: Cal.keyForDate(displayDate)
+  readonly property var todayEvents: byDay[todayKey] || []
+  readonly property var nextEvent: Cal.currentOrNextEvent(todayEvents, displayDate.getTime())
+  readonly property var alertEvent: Cal.imminentEvent(todayEvents, displayDate.getTime(), alertLeadMinutes)
+  readonly property bool alerting: alertEvent !== null || shownEvents.length > 0
+
+  // Reminders that came due before the shell started are not replayed.
+  readonly property real startedAt: Date.now()
+  property var shownReminders: ({})
+
+  // ---- Sync health, from calsync's status.json. The bar only reads the
+  //      cache; calsync (a systemd oneshot) is what talks to Google.
+  property var syncStatus: null
+  property var syncRange: null
+  readonly property real staleAfterMs: 36 * 3600000
+  readonly property real lastSyncMs: syncStatus && syncStatus.last_success > 0 ? syncStatus.last_success * 1000 : 0
+  readonly property bool syncStale: root.statusRead && (lastSyncMs === 0 || displayDate.getTime() - lastSyncMs > staleAfterMs)
+  property bool statusRead: false
+  property bool syncing: false
+
+  function applyStatus(text) {
+    var lines = String(text || "").split("\n")
+    var status = null
+    var range = null
+    try { status = JSON.parse(lines[0]) } catch (e) { status = null }
+    try { range = JSON.parse(lines[1]) } catch (e) { range = null }
+    root.syncStatus = status
+    root.syncRange = range && Cal.isDayKey(range.first) && Cal.isDayKey(range.last) ? range : null
+    root.statusRead = true
+  }
+
+  function syncHealthText() {
+    if (!root.statusRead) return ""
+    if (root.lastSyncMs === 0) return "⚠ Calendar has never synced — run calsync-doctor"
+    var hours = Math.floor((root.displayDate.getTime() - root.lastSyncMs) / 3600000)
+    var state = root.syncStatus ? String(root.syncStatus.state || "") : ""
+    if (root.syncStale) return "⚠ Calendar last synced " + hours + "h ago — run calsync-doctor"
+    if (state === "offline") return "Offline; calendar synced " + hours + "h ago"
+    if (state === "auth" || state === "error") return "⚠ Last calendar sync failed — run calsync-doctor"
+    return ""
+  }
+
+  // Opening the popup asks for a sync (skipped by calsync when the last
+  // success is under 5 minutes old), then re-reads the cache.
+  function syncNow() {
+    if (syncProcess.running) return
+    root.syncing = true
+    syncProcess.running = true
+  }
+
+  onOpenedChanged: if (opened) syncNow()
+
+  function refresh() {
+    displayDate = new Date()
+    if (!statusProcess.running) statusProcess.running = true
+    if (panelLoader.item && panelLoader.item.refresh) panelLoader.item.refresh()
+    refreshCalendar(true)
+  }
+
+  // ---- Fetching
+
+  // This week and next are always kept: they are the reminders that can
+  // come due. Whatever the panel is showing rides along.
+  function baseWeeks() {
+    var monday = Cal.weekStartKey(root.todayKey)
+    return [monday, Cal.addDays(monday, 7)]
+  }
+
+  function refreshCalendar(force) {
+    if (!root.backendChecked) {
+      if (!versionProcess.running) versionProcess.running = true
+      return
+    }
+    if (root.backendMode === "") return
+    requestWeeks(baseWeeks().concat(root.visibleWeeks), force === true)
+    if (!calendarsProcess.running) calendarsProcess.running = true
+    if (!statusProcess.running) statusProcess.running = true
+  }
+
+  function showWeeks(keys) {
+    root.visibleWeeks = keys || []
+    requestWeeks(root.visibleWeeks, false)
+  }
+
+  function weekIsFresh(key) {
+    var entry = root.weekCache[key]
+    return !!entry && entry.events !== null && (Date.now() - entry.at) < root.refreshIntervalSec * 1000
+  }
+
+  function requestWeeks(keys, force) {
+    var wanted = []
+    for (var i = 0; i < keys.length; i++) {
+      var key = keys[i]
+      if (!Cal.isDayKey(key) || wanted.indexOf(key) !== -1) continue
+      if (!force && weekIsFresh(key)) continue
+      wanted.push(key)
+    }
+    if (wanted.length === 0) return
+
+    if (weekProcess.running) {
+      var queue = root.queuedWeeks.slice()
+      for (var q = 0; q < wanted.length; q++)
+        if (queue.indexOf(wanted[q]) === -1 && root.fetchingWeeks.indexOf(wanted[q]) === -1) queue.push(wanted[q])
+      root.queuedWeeks = queue
+      return
+    }
+
+    root.loading = true
+    root.fetchingWeeks = wanted
+    weekProcess.command = Backend.fetchCommand(root.backendMode, wanted)
+    weekProcess.running = true
+  }
+
+  function applyWeeks(exitCode, stdout) {
+    root.loading = false
+    var parsed = Cal.parseRangeOutput(stdout)
+    var cache = {}
+    for (var key in root.weekCache) cache[key] = root.weekCache[key]
+    var failed = false
+
+    if (parsed === null) {
+      failed = true
+    } else {
+      for (var week in parsed) {
+        if (parsed[week] === null) {
+          failed = true
+          // A week that could not be read keeps what it had, rather than
+          // turning a busy week blank because the network blinked.
+          if (!cache[week]) cache[week] = { events: null, at: 0 }
+        } else {
+          cache[week] = { events: parsed[week], at: Date.now() }
+        }
+      }
+    }
+
+    // Keeps the cache to the weeks anyone is looking at.
+    var keep = baseWeeks().concat(root.visibleWeeks)
+    var keys = Object.keys(cache)
+    if (keys.length > 16) {
+      for (var k = 0; k < keys.length; k++)
+        if (keep.indexOf(keys[k]) === -1) delete cache[keys[k]]
+    }
+
+    // An empty answer is the shape every failure takes here (the CLI is
+    // missing, signed out, or offline), so the panel says so rather than
+    // showing a week that looks clear.
+    root.lastError = failed
+      ? (exitCode === 0 ? "No calendar cache yet. Run calsync-doctor." : "Reading the calendar cache failed (exit " + exitCode + ").")
+      : ""
+    root.weekCache = cache
+    rebuildIndex()
+    root.loaded = true
+    root.fetchingWeeks = []
+    checkReminders()
+
+    if (root.queuedWeeks.length > 0) {
+      var next = root.queuedWeeks
+      root.queuedWeeks = []
+      requestWeeks(next, true)
+    }
+  }
+
+  function rebuildIndex() {
+    root.events = Cal.withoutHidden(Cal.mergeWeeks(root.weekCache), root.hiddenCalendars)
+    root.byDay = Cal.indexByDay(root.events)
+  }
+
+  // Forgets the cached copy of the weeks a change touched, and re-reads them.
+  function invalidateDay(dayKey) {
+    var week = Cal.weekStartKey(dayKey)
+    requestWeeks([week].concat(root.visibleWeeks), true)
+  }
+
+  // ---- Reminders
+
+  function checkReminders() {
+    if (!root.notificationsEnabled || !root.loaded) return
+    var now = Date.now()
+    var due = Cal.dueReminders(root.events, now, root.startedAt - 60000, root.shownReminders)
+    if (due.length === 0) return
+    var shown = {}
+    for (var key in root.shownReminders) shown[key] = root.shownReminders[key]
+    for (var i = 0; i < due.length; i++) {
+      shown[due[i].key] = now
+      Quickshell.execDetached(Cal.notifyCommand(due[i].event, now, root.hour24,
+        root.dayUrl(Cal.eventDayKeys(due[i].event)[0] || "")))
+    }
+    // Forgets what is long past, so the set does not grow for as long as the
+    // shell runs.
+    for (var old in shown) if (now - shown[old] > 2 * 86400000) delete shown[old]
+    root.shownReminders = shown
+  }
+
+  // ---- Writes. Each one re-reads what it changed once Google has answered.
+
+  property string writeError: ""
+  property bool writing: false
+  property string writingDayKey: ""
+  signal writeFinished(bool ok, string message)
+
+  function runWrite(command, dayKey) {
+    if (writeProcess.running || !command || command.length === 0) return false
+    root.writeError = ""
+    root.writing = true
+    root.writingDayKey = dayKey || ""
+    writeProcess.command = command
+    writeProcess.running = true
+    return true
+  }
+
+  function finishWrite(exitCode, stdout) {
+    root.writing = false
+    var result = Backend.writeResult(exitCode, stdout)
+    var ok = result.ok
+    var message = result.message
+    root.writeError = ok ? "" : message
+    if (root.writingDayKey !== "") invalidateDay(root.writingDayKey)
+    root.writeFinished(ok, message)
+  }
+
+  function addEvent(form) {
+    var checked = Cal.validateEvent(form)
+    if (checked.error) {
+      root.writeError = checked.error
+      root.writeFinished(false, checked.error)
+      return false
+    }
+    return runWrite(Backend.createCommand(checked.request), form.date)
+  }
+
+  function deleteEvent(event, dayKey) {
+    return runWrite(Backend.deleteCommand(event), dayKey)
+  }
+
+  // The backend's page for a day, or "" when it has none.
+  function dayUrl(dayKey) {
+    return root.capabilities.dayLink ? Backend.dayUrl(dayKey) : ""
+  }
+
+  function modeNote() {
+    return Backend.modeNote(root.backendMode, root.backendVersion)
+  }
+
+  function openUrl(url) {
+    var safe = Cal.safeUrl(url)
+    if (safe !== "") Quickshell.execDetached(Backend.openCommand(safe))
+  }
+
+  function cycleFormat() {
+    var current = String(configuredFormat)
+    var next = Model.nextClockFormat(formatRing, current)
+    if (next === "" || next === current) return
+
+    var entry = { id: root.moduleName }
+    for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
+    entry[vertical ? "verticalFormat" : "format"] = next
+
+    // Applied locally first so the label changes on the click itself; the
+    // shell.json write comes back through the bar as the same value.
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function formatted(date) {
+    return Qt.formatDateTime(date, activeFormat.replace(/ww/g, Model.isoWeekLiteral(date.getFullYear(), date.getMonth(), date.getDate())))
+  }
+
+  // ---- Calendar popup. Shape contract for shell.summon/hide/toggle
+  //      routing: Bar.findPanelWidget requires open/close/opened on the
+  //      bar-widget root.
+  readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
+
+  function open() {
+    if (panelLoader.item) panelLoader.item.open()
+  }
+
+  function close() {
+    if (panelLoader.item) panelLoader.item.close()
+  }
+
+  function togglePanel() {
+    if (panelLoader.item) panelLoader.item.toggle()
+  }
+
+  function toggleWeekStart() {
+    if (panelLoader.item) panelLoader.item.toggleWeekStart()
+  }
+
+  function newEvent() {
+    if (panelLoader.item) panelLoader.item.newEvent()
+  }
+
+  function openSettings() {
+    if (!panelLoader.item) return
+    var panel = panelLoader.item
+    if (panel.opened) {
+      panel.openSettings()
+      return
+    }
+    // Opening hands the popout over, which closes whatever was open and
+    // resets this panel's view on the way; the switch has to come after.
+    panel.open()
+    Qt.callLater(function() { if (panel.opened) panel.openSettings() })
+  }
+
+  // The clock fills more slot than it paints a mark for, at both
+  // orientations: horizontally it is a text label in a padded slot, so the
+  // dot takes the label width; vertically it is a stack of icon-sized lines,
+  // so the dot takes one line — the same mark every icon widget gets, rather
+  // than a rule running the height of the whole stack.
+  readonly property real openPanelIndicatorWidth: button.labelWidth
+  readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
+
+  // Forwarded so this widget can stand in for the panel as the bar's popout
+  // identity: Bar.requestPopout prefers closeForPopoutSwitch over close, and
+  // KeyboardPanel reads popoutSwitchClosing back off its owner.
+  readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
+
+  function closeForPopoutSwitch() {
+    if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
+  }
+
+  function injectPanel() {
+    var target = panelLoader.item
+    if (!target) return
+    if ("bar" in target) target.bar = root.bar
+    if ("settings" in target) target.settings = root.settings
+    if ("anchorItem" in target) target.anchorItem = button
+    if ("hostWidget" in target) target.hostWidget = root
+  }
+
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
+  onBarChanged: injectPanel()
+  onSettingsChanged: injectPanel()
+
+  Component.onCompleted: refreshCalendar(true)
+
+  SystemClock {
+    id: clock
+    precision: SystemClock.Minutes
+    onDateChanged: {
+      var wasKey = root.todayKey
+      root.displayDate = date
+      // Midnight moved the day, and on Mondays the week with it.
+      if (Cal.keyForDate(date) !== wasKey) root.refreshCalendar(false)
+    }
+  }
+
+  Timer {
+    interval: root.refreshIntervalSec * 1000
+    running: true
+    repeat: true
+    onTriggered: root.refreshCalendar(true)
+  }
+
+  // Reminders are checked off the cached events, not off Google, so this is
+  // cheap enough to run often and lands within seconds of the minute.
+  Timer {
+    interval: 15000
+    running: root.notificationsEnabled
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.checkReminders()
+  }
+
+  Process {
+    id: statusProcess
+    running: false
+    command: Backend.statusCommand
+    stdout: StdioCollector {
+      onStreamFinished: root.applyStatus(text)
+    }
+  }
+
+  Process {
+    id: syncProcess
+    running: false
+    command: Backend.syncIfStaleCommand
+    onExited: {
+      root.syncing = false
+      root.refreshCalendar(true)
+    }
+  }
+
+  Process {
+    id: weekProcess
+    running: false
+    command: []
+    stdout: StdioCollector {
+      onStreamFinished: root.applyWeeks(weekProcess.exitCode, text)
+    }
+    onExited: function(exitCode) {
+      // A process that dies before its stream finishes never reaches the
+      // collector, so the spinner would stay up forever without this.
+      if (root.loading) root.applyWeeks(exitCode, "")
+    }
+  }
+
+  // Asked once. The answer decides how weeks are read, and a missing or too
+  // old CLI is said plainly in the panel rather than shown as empty days.
+  Process {
+    id: versionProcess
+    running: false
+    command: Backend.probeCommand
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var probed = Backend.probe(text)
+        root.backendVersion = probed.version
+        root.backendMode = probed.mode
+        root.backendChecked = true
+        if (root.backendMode === "") {
+          root.lastError = probed.error
+          root.loaded = true
+          return
+        }
+        root.refreshCalendar(true)
+      }
+    }
+  }
+
+  Process {
+    id: calendarsProcess
+    running: false
+    command: Backend.calendarsCommand
+    stdout: StdioCollector {
+      onStreamFinished: {
+        var parsed = Cal.parseCalendars(text)
+        if (parsed !== null) root.calendars = parsed
+      }
+    }
+  }
+
+  Process {
+    id: writeProcess
+    running: false
+    command: []
+    property bool finished: false
+    onStarted: finished = false
+    stdout: StdioCollector {
+      onStreamFinished: {
+        writeProcess.finished = true
+        root.finishWrite(writeProcess.exitCode, text)
+      }
+    }
+    onExited: function(exitCode) {
+      if (!writeProcess.finished && root.writing) root.finishWrite(exitCode, "")
+    }
+  }
+
+  Loader {
+    id: panelLoader
+    active: true
+    source: Qt.resolvedUrl("Panel.qml")
+    visible: false
+    onLoaded: {
+      root.injectPanel()
+      Qt.callLater(root.injectPanel)
+    }
+  }
+
+  IpcHandler {
+    target: "dawestheperson.gcal"
+
+    function refresh(): void { root.refresh() }
+    function cycleFormat(): void { root.cycleFormat() }
+    function toggleWeekStart(): void { root.toggleWeekStart() }
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.togglePanel() }
+    function newEvent(): void { root.newEvent() }
+    function settings(): void { root.openSettings() }
+    // Opens the popup on "day", "week" or "month".
+    function view(mode: string): void {
+      if (!panelLoader.item) return
+      var panel = panelLoader.item
+      if (!panel.opened) panel.open()
+      Qt.callLater(function() { panel.setView(mode) })
+    }
+    // calsync-check-plugin asks this to confirm the module loaded.
+    function ping(): string { return "ok" }
+  }
+
+  WidgetButton {
+    id: button
+    anchors.fill: parent
+    bar: root.bar
+    text: root.vertical ? "" : root.displayText
+    labelVisible: !root.vertical
+    hasVisualContent: root.vertical ? root.verticalLines.length > 0 : text !== ""
+    fixedHeight: root.vertical ? root.verticalLines.length * Style.bar.iconSlot : -1
+    horizontalMargin: 8.75
+    verticalPadding: 8.75
+    // The glyph says "something is close"; hovering says what, and when.
+    tooltipText: {
+      // Sync health first: it is the one thing here that needs doing.
+      var lines = []
+      var health = root.syncHealthText()
+      if (health !== "") lines.push(health)
+      if (root.lastError !== "") lines.push(root.backendName + ": " + root.lastError)
+      if (root.loaded) {
+        if (root.shownEvents.length > 0) {
+          for (var i = 0; i < root.shownEvents.length && i < 8; i++)
+            lines.push(Cal.barEventLabel(root.shownEvents[i], root.displayDate.getTime(), root.hour24))
+        } else if (root.alerting) {
+          var minutes = Cal.minutesUntil(root.alertEvent, root.displayDate.getTime())
+          lines.push((minutes <= 0 ? "Now" : "In " + minutes + " min") + " · " + root.alertEvent.title)
+        } else if (root.nextEvent) {
+          lines.push("Next: " + Cal.eventRangeLabel(root.nextEvent, root.hour24) + " · " + root.nextEvent.title)
+        }
+      }
+      return lines.join("\n")
+    }
+
+    onPressed: function(b) {
+      if (b === Qt.RightButton) root.cycleFormat()
+      else if (b === Qt.MiddleButton) { if (root.bar) root.bar.run("omarchy-menu-timezone") }
+      else root.togglePanel()
+    }
+
+    Column {
+      visible: root.vertical
+      anchors.fill: parent
+
+      Repeater {
+        model: root.verticalLines
+
+        OpticalGlyph {
+          required property string modelData
+          width: button.width
+          height: Style.bar.iconSlot
+          text: modelData
+          fontFamily: button.fontFamily
+          fontSize: modelData.length > 3
+            ? button.fontSize * 0.9
+            : button.fontSize
+          color: button.foreground
+        }
+      }
+    }
+  }
+}

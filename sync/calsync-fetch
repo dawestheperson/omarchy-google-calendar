@@ -1,0 +1,264 @@
+#!/usr/bin/python3
+# Reads ~45 days of Google Calendar into the JSON cache the bar reads.
+#
+# Auth is gcalcli's: the OAuth token `gcalcli init` saved, refreshed in
+# memory with the client gcalcli was set up with. The API is read through
+# google-api-python-client, which gcalcli itself depends on. Reading the API
+# directly (instead of `gcalcli agenda --tsv`) is what gets us each event's
+# reminders and each calendar's color, neither of which gcalcli's TSV has.
+#
+# Writes, atomically:
+#   $STATE/events.json     calendars + events, in Calendar.js's standard shapes
+#   $STATE/reminders.json  the reminder alarms due in the next 48 hours
+#
+# Exit codes (calsync maps them):
+#   0   ok
+#   3   auth: token missing, revoked or expired -> `gcalcli init`
+#   75  offline: no network / DNS / timeouts (EX_TEMPFAIL, not an alert)
+#   1   anything else
+
+import datetime as dt
+import json
+import os
+import pathlib
+import pickle
+import socket
+import sys
+import tempfile
+
+DAYS_BACK = 7
+DAYS_AHEAD = 45
+REMINDER_WINDOW_H = 48
+DEFAULT_REMINDER_MIN = 15
+
+HOME = pathlib.Path.home()
+STATE = pathlib.Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "calsync"
+GCALCLI_DATA = pathlib.Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share")) / "gcalcli"
+
+
+def die(code, message):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+
+
+def is_network_error(exc):
+    import httplib2
+    from google.auth.exceptions import TransportError
+    if isinstance(exc, (socket.gaierror, socket.timeout, TimeoutError, ConnectionError,
+                        httplib2.ServerNotFoundError, TransportError)):
+        return True
+    return isinstance(exc, OSError) and exc.errno in (101, 110, 111, 113)
+
+
+def load_service():
+    oauth = GCALCLI_DATA / "oauth"
+    if not oauth.exists():
+        die(3, f"auth: no gcalcli token at {oauth}; run `gcalcli init`")
+    try:
+        with oauth.open("rb") as f:
+            creds = pickle.load(f)
+    except Exception as e:  # noqa: BLE001
+        die(3, f"auth: cannot read {oauth} ({e}); run `gcalcli init`")
+
+    from google.auth.exceptions import RefreshError
+    from google.auth.transport.requests import Request
+    if not creds.valid:
+        try:
+            creds.refresh(Request())
+        except RefreshError as e:
+            die(3, f"auth: Google refused the token ({e}); run `gcalcli init`")
+
+    from googleapiclient.discovery import build
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+
+def local_day(value):
+    return value.astimezone().date().isoformat()
+
+
+def parse_instant(text):
+    return dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def fmt_time(t):
+    return t.strftime("%-I:%M %p")
+
+
+def event_reminders(event, calendar, all_day):
+    """Minutes-before for every reminder the event has, Google's way.
+
+    With none set, timed events on calendars you own get the 15-minute
+    default. All-day events and read-only calendars (holidays, subscriptions)
+    stay silent, as they do in Google Calendar itself.
+    """
+    rem = event.get("reminders") or {}
+    if rem.get("useDefault", True):
+        overrides = calendar.get("defaultReminders") or []
+    else:
+        overrides = rem.get("overrides") or []
+    minutes = sorted({int(r["minutes"]) for r in overrides if "minutes" in r})
+    if minutes:
+        return minutes
+    owned = calendar.get("accessRole") in ("owner", "writer")
+    return [DEFAULT_REMINDER_MIN] if owned and not all_day else []
+
+
+def self_status(event):
+    for a in event.get("attendees") or []:
+        if a.get("self"):
+            return a.get("responseStatus", "")
+    return ""
+
+
+def main():
+    service = load_service()
+    now = dt.datetime.now().astimezone()
+    today = now.date()
+    first = today - dt.timedelta(days=DAYS_BACK)
+    last = today + dt.timedelta(days=DAYS_AHEAD)
+    time_min = dt.datetime.combine(first, dt.time.min).astimezone()
+    time_max = dt.datetime.combine(last + dt.timedelta(days=1), dt.time.min).astimezone()
+
+    items = []
+    token = None
+    while True:
+        page = service.calendarList().list(pageToken=token).execute()
+        items.extend(page.get("items", []))
+        token = page.get("nextPageToken")
+        if not token:
+            break
+    # Only the calendars ticked in Google Calendar's own sidebar.
+    items = [c for c in items if c.get("selected")]
+    items.sort(key=lambda c: (not c.get("primary", False), c.get("summary", "").lower()))
+
+    calendars = []
+    events = []
+    alarms = []
+    horizon = now + dt.timedelta(hours=REMINDER_WINDOW_H)
+
+    for index, cal in enumerate(items, start=1):
+        name = cal.get("summaryOverride") or cal.get("summary") or "Calendar"
+        color = (cal.get("backgroundColor") or "").lower()
+        owned = cal.get("accessRole") in ("owner", "writer")
+        calendars.append({"id": index, "name": name, "color": color, "kind": "",
+                          "owned": owned, "google_id": cal["id"],
+                          "primary": bool(cal.get("primary"))})
+
+        token = None
+        while True:
+            page = service.events().list(
+                calendarId=cal["id"], timeMin=time_min.isoformat(), timeMax=time_max.isoformat(),
+                singleEvents=True, orderBy="startTime", maxResults=2500, pageToken=token,
+                fields="nextPageToken,items(id,recurringEventId,status,summary,location,start,end,"
+                       "htmlLink,hangoutLink,conferenceData/entryPoints,reminders,attendees(self,responseStatus))",
+            ).execute()
+            for ev in page.get("items", []):
+                if ev.get("status") == "cancelled":
+                    continue
+                start, end = ev.get("start", {}), ev.get("end", {})
+                all_day = "date" in start
+                if all_day:
+                    starts_at, ends_at = start["date"], end.get("date", start["date"])
+                    first_day = starts_at
+                    last_day = (dt.date.fromisoformat(ends_at) - dt.timedelta(days=1)).isoformat()
+                    last_day = max(last_day, first_day)
+                    start_dt = dt.datetime.combine(dt.date.fromisoformat(starts_at), dt.time.min).astimezone()
+                    end_dt = None
+                else:
+                    start_dt = parse_instant(start["dateTime"])
+                    end_dt = parse_instant(end.get("dateTime", start["dateTime"]))
+                    starts_at, ends_at = start_dt.isoformat(), end_dt.isoformat()
+                    first_day = local_day(start_dt)
+                    # An event ending exactly at midnight does not touch the next day.
+                    last_instant = end_dt - dt.timedelta(seconds=1) if end_dt > start_dt else end_dt
+                    last_day = max(local_day(last_instant), first_day)
+
+                join = ev.get("hangoutLink", "")
+                for ep in (ev.get("conferenceData") or {}).get("entryPoints", []):
+                    if ep.get("entryPointType") == "video" and ep.get("uri", "").startswith("https://"):
+                        join = ep["uri"]
+                        break
+
+                status = self_status(ev)
+                minutes = event_reminders(ev, cal, all_day)
+                reminder_times = [start_dt - dt.timedelta(minutes=m) for m in minutes]
+                title = ev.get("summary") or "(untitled)"
+                location = ev.get("location", "")
+
+                events.append({
+                    "id": ev["id"],
+                    "occurrence_id": ev["id"],
+                    "parent_id": ev.get("recurringEventId", ""),
+                    "recurring": bool(ev.get("recurringEventId")),
+                    "title": title,
+                    "all_day": all_day,
+                    "starts_at": starts_at,
+                    "ends_at": ends_at,
+                    "location": location,
+                    "calendar_id": index,
+                    "calendar": name,
+                    "color": color,
+                    "join_url": join,
+                    "join_title": "Join" if join else "",
+                    "url": ev.get("htmlLink", ""),
+                    "status": status,
+                    "owned": owned,
+                    "reminders": [t.isoformat() for t in reminder_times],
+                    "first_day": first_day,
+                    "last_day": last_day,
+                })
+
+                if status == "declined":
+                    continue
+                for m, t in zip(minutes, reminder_times):
+                    if now < t <= horizon:
+                        if all_day:
+                            when = "All day " + start_dt.strftime("%a %b %-d")
+                        else:
+                            lead = f"in {m} min" if m < 60 else (f"in {m // 60} h" if m % 60 == 0 else f"in {m} min")
+                            when = f"{lead} · {fmt_time(start_dt)} – {fmt_time(end_dt)}"
+                        body = when + (f"\n{location}" if location else "")
+                        alarms.append({"at": t.strftime("%Y-%m-%d %H:%M:%S"), "title": title,
+                                       "body": body, "event": ev["id"]})
+            token = page.get("nextPageToken")
+            if not token:
+                break
+
+    events.sort(key=lambda e: e["starts_at"])
+    alarms.sort(key=lambda a: a["at"])
+    synced_at = now.isoformat()
+    write_json(STATE / "events.json", {
+        "version": 1, "synced_at": synced_at,
+        "range": {"first": first.isoformat(), "last": last.isoformat()},
+        "calendars": calendars, "events": events,
+    })
+    write_json(STATE / "reminders.json", {"synced_at": synced_at, "alarms": alarms})
+    print(f"fetched {len(events)} events from {len(calendars)} calendars "
+          f"({first}..{last}); {len(alarms)} reminders in the next {REMINDER_WINDOW_H}h")
+
+
+def write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001
+        from googleapiclient.errors import HttpError
+        if is_network_error(e):
+            die(75, f"offline: {type(e).__name__}: {e}")
+        if isinstance(e, HttpError) and e.resp.status in (401, 403):
+            die(3, f"auth: Google answered {e.resp.status} ({e}); run `gcalcli init`")
+        if isinstance(e, HttpError) and e.resp.status >= 500:
+            die(75, f"offline: Google is having trouble ({e.resp.status}); will retry")
+        from google.auth.exceptions import RefreshError
+        if isinstance(e, RefreshError):
+            die(3, f"auth: {e}; run `gcalcli init`")
+        die(1, f"error: {type(e).__name__}: {e}")

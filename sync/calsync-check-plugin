@@ -1,0 +1,66 @@
+#!/bin/bash
+# Checks the bar plugin is installed, enabled, valid, in the bar, and loaded
+# by the running shell. Prints one line per check; exits 1 if any failed.
+#
+#   calsync-check-plugin            print the checks
+#   calsync-check-plugin --notify   also pop a notification when broken
+#                                   (used after Omarchy updates)
+
+set -uo pipefail
+# CALSYNC_PLUGIN_ID only exists to test the broken-plugin alert.
+ID="${CALSYNC_PLUGIN_ID:-dawestheperson.gcal}"
+DIR="$HOME/.config/omarchy/plugins/$ID"
+notify=0
+[[ ${1:-} == --notify ]] && notify=1
+
+problems=()
+pass() { echo "  ok    $*"; }
+fail() { echo "  FAIL  $*"; problems+=("$*"); }
+
+if [[ -f $DIR/manifest.json ]]; then
+  pass "installed at $DIR"
+else
+  fail "not installed (no $DIR/manifest.json)"
+fi
+
+enabled=$(omarchy plugin list --json 2>/dev/null | jq -r --arg id "$ID" '.[] | select(.id == $id) | .enabled' 2>/dev/null)
+case $enabled in
+true) pass "enabled in omarchy plugin list" ;;
+false) fail "installed but disabled" ;;
+*) fail "not listed by omarchy plugin list" ;;
+esac
+
+if [[ -d $DIR ]]; then
+  if out=$(omarchy plugin validate "$DIR" 2>&1); then
+    pass "manifest validates"
+  else
+    fail "manifest does not validate: $(echo "$out" | tail -n 1)"
+  fi
+fi
+
+if jq -e --arg id "$ID" '[.bar.layout[]?[]?.id] | index($id)' "$HOME/.config/omarchy/shell.json" >/dev/null 2>&1; then
+  pass "placed in the bar (shell.json)"
+else
+  fail "not in the bar layout in ~/.config/omarchy/shell.json"
+fi
+
+if ! omarchy-shell shell ping >/dev/null 2>&1; then
+  echo "  skip  shell is not running, cannot check the bar module loaded"
+else
+  answer=$(omarchy-shell "$ID" ping 2>&1)
+  if [[ $answer == ok ]]; then
+    pass "bar module is loaded and answering"
+  else
+    fail "bar module did not load ($answer)"
+  fi
+fi
+
+if ((${#problems[@]})); then
+  if ((notify)); then
+    "$(dirname "$(readlink -f "$0")")/calsync-notify" critical "󰃮" \
+      "Calendar plugin broken after Omarchy update" \
+      "${problems[0]} — run calsync-doctor"
+  fi
+  exit 1
+fi
+exit 0

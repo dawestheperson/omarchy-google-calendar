@@ -1,0 +1,11 @@
+#!/bin/bash
+# calsync-notify <urgency> <glyph> <headline> [body]
+# Omarchy's own notifier when it is there (themed, with a glyph), plain
+# notify-send when an Omarchy update ever renames it.
+urgency=$1 glyph=$2 headline=$3 body=${4:-}
+for sender in omarchy-notification-send /usr/share/omarchy/bin/omarchy-notification-send; do
+  if command -v "$sender" >/dev/null 2>&1; then
+    "$sender" --app-name Calendar -u "$urgency" -g "$glyph" "$headline" "$body" >/dev/null 2>&1 && exit 0
+  fi
+done
+exec notify-send --app-name=Calendar --urgency="$urgency" "$headline" "$body"

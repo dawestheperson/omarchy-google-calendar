@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "id": "dawestheperson.gcal",
+  "name": "Google Calendar for Omarchy",
+  "version": "1.0.0",
+  "author": "dawestheperson",
+  "license": "MIT",
+  "description": "Omarchy's clock with your Google Calendar in it: the next event in the bar, per-calendar chips and day/week/month views in the popup, quick add from anywhere, and reminders. Syncs through gcalcli on a schedule; nothing runs in the background.",
+  "kinds": [
+    "service",
+    "bar-widget",
+    "overlay"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "overlay": "QuickAdd.qml"
+  },
+  "barWidget": {
+    "displayName": "Google Calendar",
+    "description": "The stock date/time label and calendar popup, with your Google Calendar in it.",
+    "category": "Time",
+    "aliases": [
+      "calendar",
+      "clock",
+      "google",
+      "gcal",
+      "events"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": {
+      "alertLeadMinutes": 15,
+      "timeFormat": "auto",
+      "refreshIntervalSec": 300,
+      "quickAddShortcut": "ALT + SHIFT + SPACE",
+      "barEvent": "upcoming"
+    },
+    "schema": [
+      {
+        "key": "barEvent",
+        "type": "enum",
+        "label": "Event in the bar",
+        "options": [
+          "upcoming",
+          "soon",
+          "name",
+          "time",
+          "next",
+          "off"
+        ],
+        "defaultValue": "upcoming",
+        "description": "\"upcoming\" always shows your next event from your own calendars, any day. \"soon\" shows an event from its earliest reminder until it ends; \"name\"/\"time\" show only one half. \"next\" shows today's next event. \"off\" shows only the clock."
+      },
+      {
+        "key": "quickAddShortcut",
+        "type": "string",
+        "label": "Quick add shortcut",
+        "defaultValue": "ALT + SHIFT + SPACE",
+        "description": "Opens the new-event card from anywhere. Leave empty to turn it off. A shortcut already in use is not taken."
+      },
+      {
+        "key": "alertLeadMinutes",
+        "type": "integer",
+        "label": "Show the calendar icon this many minutes ahead",
+        "min": 0,
+        "max": 240,
+        "step": 5,
+        "defaultValue": 15,
+        "description": "The icon appears this long before an event starts and stays until it ends. 0 turns it off."
+      },
+      {
+        "key": "timeFormat",
+        "type": "enum",
+        "label": "Event times",
+        "options": [
+          "auto",
+          "12",
+          "24"
+        ],
+        "defaultValue": "auto",
+        "description": "\"auto\" follows the system locale."
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Re-read the local cache every (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      },
+      {
+        "key": "hiddenCalendars",
+        "type": "string",
+        "label": "Hidden calendars",
+        "defaultValue": "",
+        "description": "Comma-separated calendar names to leave out. Calendars unticked in Google Calendar are already left out."
+      }
+    ]
+  },
+  "homepage": "https://github.com/dawestheperson/omarchy-google-calendar"
+}

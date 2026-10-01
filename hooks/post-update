@@ -1,0 +1,6 @@
+#!/bin/bash
+# Omarchy post-update hook (~/.config/omarchy/hooks/post-update.d/calsync-check).
+# The shell restarts at the end of an update, so the check runs a little
+# later, detached, and notifies only if the calendar plugin is broken.
+systemd-run --user --quiet --collect --unit=calsync-postupdate-check --on-active=2min \
+  "$HOME/.local/bin/calsync-check-plugin" --notify 2>/dev/null || true

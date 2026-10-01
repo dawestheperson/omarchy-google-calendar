@@ -1,0 +1,35 @@
+#!/bin/bash
+# Re-arms the reminder alarms from $STATE/reminders.json (written by
+# calsync-fetch): stops every calsync-rem-* timer, then starts one transient
+# systemd user timer per reminder due in the next 48 hours. Each fires once,
+# runs calsync-notify, and is gone. Nothing stays running in between.
+#
+# Transient timers do not survive a reboot or logout; the sync at login
+# (calsync.timer OnStartupSec) re-arms them.
+
+set -uo pipefail
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/calsync"
+FILE="$STATE/reminders.json"
+
+# Clear first, so moved or deleted events never leave a stale alert.
+mapfile -t old < <(systemctl --user list-units --all --plain --no-legend 'calsync-rem-*.timer' | awk '{print $1}')
+((${#old[@]})) && systemctl --user stop "${old[@]}" 2>/dev/null
+systemctl --user reset-failed 'calsync-rem-*' 2>/dev/null
+
+[[ -r $FILE ]] || exit 0
+
+now=$(date +%s)
+n=0
+while IFS=$'\t' read -r at title body; do
+  [[ -z $at ]] && continue
+  (($(date -d "$at" +%s) > now)) || continue
+  n=$((n + 1))
+  systemd-run --user --quiet --collect \
+    --unit="calsync-rem-$n" \
+    --description="Calendar reminder: $title" \
+    --on-calendar="$at" \
+    --timer-property=AccuracySec=1s \
+    -- "$HOME/.local/bin/calsync-notify" normal "󰃭" "$title" "$(printf '%b' "$body")"
+done < <(jq -r '.alarms[] | [.at, .title, .body] | @tsv' "$FILE")
+
+echo "armed $n reminder timer(s)"

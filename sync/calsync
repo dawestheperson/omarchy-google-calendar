@@ -1,0 +1,115 @@
+#!/bin/bash
+# One calendar sync: fetch ~45 days from Google into the cache the bar reads,
+# re-arm the reminder timers, and exit. Normally run by calsync.service (so a
+# real failure triggers calsync-failed.service); safe to run by hand.
+#
+#   calsync                      sync now
+#   calsync --if-stale SECONDS   sync only if the last success is older than
+#                                SECONDS, or an offline retry is pending
+#
+# Offline is not a failure: it records "offline", leaves a pending-retry flag
+# for the network-online hook, and exits 0 so no alert fires. Auth errors,
+# gcalcli/API errors and a broken cache exit non-zero, which is an alert.
+
+set -uo pipefail
+
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/calsync"
+BIN="$(dirname "$(readlink -f "$0")")"
+LOG="$STATE/calsync.log"
+mkdir -p "$STATE"
+
+log() {
+  local line="$(date '+%F %T') $*"
+  echo "$*"
+  echo "$line" >>"$LOG"
+}
+
+write_status() { # state message
+  local now last_success
+  now=$(date +%s)
+  last_success=$(cat "$STATE/last-success" 2>/dev/null || echo 0)
+  jq -cn --arg state "$1" --arg message "$2" --argjson at "$now" --argjson ok "$last_success" \
+    '{state: $state, message: $message, last_attempt: $at, last_success: $ok}' >"$STATE/status.json.tmp" &&
+    mv "$STATE/status.json.tmp" "$STATE/status.json"
+}
+
+if_stale=""
+while (($#)); do
+  case "$1" in
+  --if-stale) if_stale="$2"; shift 2 ;;
+  -h | --help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "calsync: unknown argument $1" >&2; exit 2 ;;
+  esac
+done
+
+exec 9>"$STATE/lock"
+if ! flock -n 9; then
+  echo "another sync is running; skipping"
+  exit 0
+fi
+
+if [[ -n $if_stale ]]; then
+  last=$(cat "$STATE/last-success" 2>/dev/null || echo 0)
+  age=$(($(date +%s) - last))
+  if ((age < if_stale)) && [[ ! -e $STATE/pending-retry ]]; then
+    echo "last success ${age}s ago (< ${if_stale}s) and no retry pending; skipping"
+    exit 0
+  fi
+fi
+
+# Keeps the log to the last 1000 lines.
+if [[ -f $LOG ]] && (($(wc -l <"$LOG") > 1200)); then
+  tail -n 1000 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
+
+# ---- Test hook: `echo offline > $STATE/simulate` (or `error`, `auth`) makes
+#      the next syncs fail that way until the file is removed.
+simulate=$(cat "$STATE/simulate" 2>/dev/null || true)
+
+if [[ $simulate == offline ]] || { [[ -z $simulate ]] && ! getent hosts www.googleapis.com >/dev/null 2>&1; }; then
+  out="offline: cannot resolve www.googleapis.com"
+  rc=75
+elif [[ $simulate == error || $simulate == auth ]]; then
+  out="$simulate: simulated failure (remove $STATE/simulate to stop)"
+  [[ $simulate == auth ]] && rc=3 || rc=1
+else
+  out=$(timeout 120 "$BIN/calsync-fetch" 2>&1)
+  rc=$?
+  ((rc == 124)) && out="offline: fetch timed out after 120s" && rc=75
+fi
+
+case $rc in
+0)
+  log "ok: $out"
+  date +%s >"$STATE/last-success"
+  rm -f "$STATE/pending-retry"
+  write_status ok "$out"
+  "$BIN/calsync-reminders" || log "warning: could not arm reminder timers"
+  ;;
+75)
+  log "$out (will retry when the network comes back)"
+  touch "$STATE/pending-retry"
+  write_status offline "$out"
+  ;;
+3)
+  log "FAILED (auth) $out"
+  write_status auth "$out"
+  exit 3
+  ;;
+*)
+  log "FAILED (rc=$rc) $out"
+  write_status error "$out"
+  exit 1
+  ;;
+esac
+
+# ---- After an Omarchy update, check the bar plugin still loads. The
+#      post-update hook does this too; this catches updates it missed.
+version=$(omarchy version 2>/dev/null || true)
+if [[ -n $version && $version != "$(cat "$STATE/omarchy-version" 2>/dev/null)" ]]; then
+  log "Omarchy version is now $version; checking the plugin"
+  if "$BIN/calsync-check-plugin" --notify; then
+    echo "$version" >"$STATE/omarchy-version"
+  fi
+fi
+exit 0

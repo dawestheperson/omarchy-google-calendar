@@ -1,0 +1,15 @@
+#!/bin/bash
+# Run by calsync-failed.service (OnFailure= of the sync units). Offline runs
+# never get here: calsync exits 0 for them. Rate-limited to one popup per 6
+# hours so a broken setup nags without spamming.
+
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/calsync"
+stamp="$STATE/last-failure-alert"
+if [[ -f $stamp ]] && (($(date +%s) - $(stat -c %Y "$stamp") < 6 * 3600)); then
+  echo "alerted less than 6h ago; staying quiet"
+  exit 0
+fi
+touch "$stamp"
+"$(dirname "$(readlink -f "$0")")/calsync-notify" critical "󰃮" \
+  "Calendar sync failed — run calsync-doctor" \
+  "$(jq -r '.message // empty' "$STATE/status.json" 2>/dev/null | head -c 200)"
