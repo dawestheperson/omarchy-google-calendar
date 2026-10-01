@@ -135,6 +135,10 @@ sync re-arms them. The shell's own in-panel reminder loop is switched off
 - `tests/run`: node tests in 5 timezones (`Calendar.js` and the backend).
 - `install.sh` (install, repair, `--uninstall`), `GOOGLE_SETUP.md` (making the
   OAuth client), `README.md`.
+- `docs/`: the GitHub Pages site (homepage + privacy policy) at
+  https://dawestheperson.github.io/omarchy-google-calendar/. Users' OAuth
+  consent screens link to it (GOOGLE_SETUP.md step 3), so keep both URLs
+  working: Google can refuse sign-ins for an app whose links are dead.
 
 ## 12 or 24 hours
 
@@ -230,8 +234,8 @@ the same slot, without this plugin's settings.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Popup "Calendar sync failed", doctor says **auth** / `invalid_grant` | Token revoked or expired (password change, access removed at myaccount.google.com/permissions, or the app went back to Testing) | Check Audience is still **In production** in the Cloud console. Then run `gcalcli init` in a terminal and approve (Advanced → Go to gcalcli (unsafe) → Continue). Then `systemctl --user start calsync`. |
-| Google login page: "Access blocked … has not completed the Google verification process", Error 403 access_denied | App is in Testing and you are not a test user | Audience → **Publish app**. If Publish is greyed out, Branding needs a homepage and privacy URL on an authorized domain (GOOGLE_SETUP.md step 4), then Save. |
+| Popup "Calendar sync failed", doctor says **auth** / `invalid_grant` | Token revoked or expired (password change, access removed at myaccount.google.com/permissions, or the app went back to Testing) | Check Audience is still **In production** in the Cloud console. Then run `gcalcli init` in a terminal and approve (Advanced → Go to <app name> (unsafe) → Continue; GOOGLE_SETUP.md step 6). Then `systemctl --user start calsync`. |
+| Google login page: "Access blocked … has not completed the Google verification process", Error 403 access_denied | App is in Testing and you are not a test user | Audience → **Publish app**. If Publish is greyed out, Branding needs the homepage, privacy URL and authorized domain (GOOGLE_SETUP.md step 3), then Save. |
 | `gcalcli init` asks for the client ID/secret again | `oauth` file deleted | The ID is shown under Clients in the Cloud console. The secret is shown only once, so create a new secret there (or a new Desktop client). |
 | ⚠ in the bar, doctor says "offline" for days | Network hook not installed, or DNS broken | `sudo root/install-root.sh`. Check `getent hosts www.googleapis.com`. |
 | ⚠ in the bar, no popup | Syncs aren't running at all | `systemctl --user status calsync.timer`. If it's not active, `./install.sh`. |

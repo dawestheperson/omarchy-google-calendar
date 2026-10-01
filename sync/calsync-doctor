@@ -34,7 +34,7 @@ else
     warn "offline, so the login could not be checked"
   else
     fail "gcalcli cannot reach your calendars: $(tail -n 1 <<<"$out")"
-    fix "Sign in again: run \`gcalcli init\` in a terminal and approve in the browser (Advanced → Go to gcalcli → Continue)."
+    fix "Sign in again: run \`gcalcli init\` in a terminal and approve in the browser (Advanced → Go to <your app name> (unsafe) → Continue). GOOGLE_SETUP.md step 6."
     fix "If Google says the app is blocked or in testing: in console.cloud.google.com, open your project → Google Auth Platform → Audience, which must say 'In production' (see GOOGLE_SETUP.md)."
   fi
 fi

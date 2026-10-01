@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Google Calendar for Omarchy</title>
+<meta name="description" content="Your Google Calendar in the Omarchy bar: the next event, day/week/month views, quick add and reminders. Syncs through gcalcli; nothing runs in the background.">
+<style>
+  :root {
+    --bg: #f7f7f5; --fg: #1d1f21; --muted: #5c6166; --card: #ffffff;
+    --line: #e2e2de; --accent: #2f7d5b; --code: #efefeb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111315; --fg: #e6e6e3; --muted: #9aa0a6; --card: #1a1d20;
+      --line: #2b2f33; --accent: #6fd3a3; --code: #22262a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: clamp(28px, 6vw, 42px); line-height: 1.15; margin: 0 0 8px; }
+  h2 { font-size: 22px; margin: 44px 0 12px; }
+  p.lead { font-size: 18px; color: var(--muted); margin: 0 0 24px; }
+  a { color: var(--accent); }
+  .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 32px; }
+  .btn { display: inline-block; padding: 10px 16px; border-radius: 8px; text-decoration: none;
+    border: 1px solid var(--line); background: var(--card); color: var(--fg); font-weight: 600; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  figure { margin: 0; }
+  .bar { background: #0b0d0f; border-radius: 10px; padding: 14px; text-align: center; }
+  .bar img { max-width: 100%; height: auto; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 14px; }
+  .shots img { width: 100%; height: auto; border-radius: 10px; display: block; }
+  figcaption { color: var(--muted); font-size: 14px; margin-top: 6px; }
+  ul { padding-left: 20px; }
+  li { margin: 6px 0; }
+  pre { background: var(--code); padding: 14px; border-radius: 8px; overflow-x: auto; font-size: 14px; }
+  code { font-family: ui-monospace, "JetBrains Mono", monospace; }
+  .note { border-left: 3px solid var(--accent); padding: 4px 14px; color: var(--muted); }
+  footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Google Calendar for Omarchy</h1>
+  <p class="lead">Your Google Calendar in the <a href="https://omarchy.org">Omarchy</a> bar. The clock stays where it was, with your next event in front of it. Click it for your calendar.</p>
+
+  <div class="buttons">
+    <a class="btn primary" href="https://github.com/dawestheperson/omarchy-google-calendar#install">Install</a>
+    <a class="btn" href="https://github.com/dawestheperson/omarchy-google-calendar/blob/main/GOOGLE_SETUP.md">Google setup guide</a>
+    <a class="btn" href="https://github.com/dawestheperson/omarchy-google-calendar">Source on GitHub</a>
+  </div>
+
+  <figure class="bar">
+    <img src="img/bar.png" alt="The Omarchy bar showing 'Design review · in 39m' before the clock">
+  </figure>
+
+  <div class="shots">
+    <figure><img src="img/month.png" alt="Month view with a colored chip per calendar and the day's events"><figcaption>Month view</figcaption></figure>
+    <figure><img src="img/week.png" alt="Week view listing each day's events"><figcaption>Week view</figcaption></figure>
+    <figure><img src="img/quick-add.png" alt="The quick-add card with AM/PM buttons"><figcaption>Quick add, from anywhere</figcaption></figure>
+  </div>
+  <p class="note">The screenshots use made-up events.</p>
+
+  <h2>What it does</h2>
+  <ul>
+    <li><strong>Your next event in the bar</strong>, with when it is: <code>Dentist · tue 2:00 PM</code>, <code>in 12m</code>, <code>until 3:00pm</code>.</li>
+    <li><strong>Day, week and month views</strong>. The month grid shows a colored chip per calendar with that day's count.</li>
+    <li><strong>Quick add</strong> with Alt+Shift+Space. The event goes straight to Google, so it shows up on your phone too.</li>
+    <li><strong>Reminders</strong> as desktop notifications, at each event's own Google reminder time.</li>
+    <li><strong>Nothing runs in the background.</strong> A short sync runs a few times a day, then exits.</li>
+    <li><strong>Looks after itself</strong>: it warns you if syncing stops, checks itself after Omarchy updates, and <code>calsync-doctor</code> explains any problem in plain English.</li>
+  </ul>
+
+  <h2>How you connect it to Google</h2>
+  <p>Google doesn't hand out calendar access to shared apps without a lengthy review, so each person makes a free, private "OAuth client" in their own Google account. It takes about 20 minutes, once. The <a href="https://github.com/dawestheperson/omarchy-google-calendar/blob/main/GOOGLE_SETUP.md">Google setup guide</a> walks through every click. You can use this page and the <a href="privacy.html">privacy policy</a> as your app's homepage and privacy link.</p>
+
+  <h2>Install</h2>
+<pre><code>omarchy pkg aur add gcalcli
+# follow the Google setup guide, then:
+gcalcli init
+omarchy plugin add https://github.com/dawestheperson/omarchy-google-calendar --yes
+~/.config/omarchy/plugins/dawestheperson.gcal/install.sh
+omarchy restart shell</code></pre>
+  <p>Full instructions, updating and uninstalling are in the <a href="https://github.com/dawestheperson/omarchy-google-calendar#readme">README</a>.</p>
+
+  <footer>
+    <a href="privacy.html">Privacy policy</a> ·
+    <a href="https://github.com/dawestheperson/omarchy-google-calendar/blob/main/LICENSE">MIT license</a> ·
+    Personal project, provided as-is. Not affiliated with, endorsed by or supported by Google or Omarchy. Google Calendar is a trademark of Google LLC.
+  </footer>
+</main>
+</body>
+</html>

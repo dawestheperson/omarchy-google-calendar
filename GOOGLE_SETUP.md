@@ -1,131 +1,170 @@
-# Google setup: your own OAuth client
+# Connecting Google Calendar for Omarchy to your Google account
 
-gcalcli needs an OAuth client that belongs to you before it can read your
-calendar. You do this once, in your browser, and it takes about 20 minutes. It
-costs nothing, and no billing account is needed.
+You'll need about **20 minutes, once**. It's all free: no credit card, no
+billing account. Just follow the steps in order.
 
-**The one step that matters most is step 5.** Your app has to be **In
-production**, not "Testing". A login made while the app is in Testing stops
-working after 7 days.
+## Why this is needed
 
-## 1. Create a project
+Before any program can read a Google Calendar, Google wants it to have its own
+"app" registered in Google's developer console. Big shared apps go through a
+long review by Google. For something personal like this, the simple route is
+for **you to register your own private app**, used only by you, and point it at
+your own calendar.
 
-1. Open <https://console.cloud.google.com> and sign in with the Google account
-   whose calendar you want.
-2. Click the project picker at the top, then **New project**. Name it, for
-   example `gcalcli-personal`, and click **Create**.
-3. Make sure the new project is selected in the picker.
+So in this guide you will:
 
-## 2. Turn on the Calendar API
+1. **Make a project** in Google Cloud: a folder for your app.
+2. **Switch on the Google Calendar API**, which lets the app talk to Calendar.
+3. **Describe your app** on Google's consent screen (its name and links).
+4. **Publish it.** This step matters: without it, your sign-in stops working
+   after 7 days.
+5. **Create a key pair**, a *Client ID* and *Client secret*. This is your app's
+   username and password with Google.
+6. **Sign in once** with `gcalcli init`. After that it just works.
 
-**APIs & Services → Library**: search for **Google Calendar API**, open it, and
-click **Enable**.
+Your data only ever goes between your computer and Google. See the
+[privacy policy](https://dawestheperson.github.io/omarchy-google-calendar/privacy.html).
 
-## 3. Set up the consent screen
+## Before you start
 
-Open **Google Auth Platform** (formerly the "OAuth consent screen") and click
-**Get started**. Then fill in each part:
+- [ ] gcalcli is installed: `omarchy pkg aur add gcalcli`
+- [ ] You know which Google account has your calendar
+- [ ] You have a browser where you're signed in to that account
 
-- **App information:** App name `gcalcli`. User support email: your address.
-- **Audience:** **External**.
-- **Contact information:** your address.
-- **Finish:** tick the agreement to the Google API Services User Data Policy,
-  then **Create**.
+---
 
-## 4. Give it a homepage and privacy page
+## Step 1: Make a project
 
-Google won't let you publish (step 5) until Branding has an **Application home
-page** and a **privacy policy link**, both on a domain you list under
-**Authorized domains**.
+1. Go to **<https://console.cloud.google.com>** and sign in with your calendar's
+   Google account. If it asks you to accept Google Cloud's terms, accept them.
+   You **don't** need the free trial or a billing account; ignore those
+   banners.
+2. At the top left, click the **project picker** (it may say "Select a
+   project"), then **New project**.
+3. **Project name:** `Google Calendar for Omarchy`. Leave the rest as it is,
+   then click **Create**.
+4. Wait a few seconds. In the project picker, make sure your new project is
+   selected.
 
-GitHub Pages works and is free:
+✅ The top bar shows **Google Calendar for Omarchy**.
 
-1. Create a public repository, for example `gcalcli-personal`, with two files:
+## Step 2: Switch on the Google Calendar API
 
-   `index.html`
+1. Open the menu (☰) → **APIs & Services → Library**.
+2. Search for **Google Calendar API** and click it.
+3. Click **Enable**.
 
-   ```html
-   <!doctype html>
-   <html lang="en"><head><meta charset="utf-8"><title>gcalcli (personal)</title></head>
-   <body>
-   <h1>gcalcli (personal)</h1>
-   <p>A private, single-user OAuth client for gcalcli, used by one person to read and add
-   events on their own Google Calendar from their own computer. <a href="privacy.html">Privacy policy</a>.</p>
-   </body></html>
-   ```
+✅ The page now says **API enabled** (or the button changes to **Manage**).
 
-   `privacy.html`
+## Step 3: Describe your app (the consent screen)
 
-   ```html
-   <!doctype html>
-   <html lang="en"><head><meta charset="utf-8"><title>Privacy</title></head>
-   <body>
-   <h1>Privacy policy</h1>
-   <p>This OAuth client is used only by its owner, on their own computer, to access their own
-   Google Calendar through gcalcli. Calendar data is read and written only at the owner's
-   request and cached only on the owner's machine. Nothing is sent to anyone but Google.
-   Access can be revoked at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
-   </body></html>
-   ```
+1. Open the menu (☰) → **Google Auth Platform**. In older consoles this was
+   **APIs & Services → OAuth consent screen**.
+2. Click **Get started**. A four-part form opens:
+   - **App information.** App name: `Google Calendar for Omarchy`. User support
+     email: pick your address. Click **Next**.
+   - **Audience.** Choose **External** (personal Gmail accounts can't pick
+     Internal). Click **Next**.
+   - **Contact information.** Type your email address and press Enter. Click
+     **Next**.
+   - **Finish.** Tick **I agree to the Google API Services: User Data Policy**,
+     click **Continue**, then **Create**.
+3. In the left sidebar, open **Branding** and scroll to **App domain**. Fill in:
+   - **Application home page:**
+     `https://dawestheperson.github.io/omarchy-google-calendar/`
+   - **Application privacy policy link:**
+     `https://dawestheperson.github.io/omarchy-google-calendar/privacy.html`
+   - Under **Authorized domains**, click **+ Add domain** and enter
+     `dawestheperson.github.io`
+4. Leave **App logo** empty. A logo makes Google require a review.
+5. Click **Save** at the bottom.
 
-2. In that repository, go to **Settings → Pages**, set the source to the `main`
-   branch, and **Save**. After a minute the site is live at
-   `https://<your-username>.github.io/gcalcli-personal/`.
-3. Back in **Google Auth Platform → Branding**:
-   - Application home page: `https://<your-username>.github.io/gcalcli-personal/`
-   - Application privacy policy link: `https://<your-username>.github.io/gcalcli-personal/privacy.html`
-   - Authorized domains: **Add domain**, then `<your-username>.github.io`
-   - Click **Save**.
+✅ You see "Branding changes saved".
 
-Leave **App logo** empty. Uploading a logo means Google has to review the app.
+> The homepage and privacy page are this project's own. They cover the way
+> every user uses it: a private app per person, with no shared server. Google
+> needs these links before it lets you publish (next step). If you'd rather
+> host your own pages, see [Hosting your own pages](#hosting-your-own-pages).
 
-## 5. Publish the app
+## Step 4: Publish the app (don't skip this)
 
-**Google Auth Platform → Audience → Publish app → Confirm.** Publishing status
-must now say **In production**.
+1. In the left sidebar, open **Audience**.
+2. Under **Publishing status**, click **Publish app**, then **Confirm**.
 
-You don't need to submit for verification. An unverified app is fine for your
-own use. You'll just see a warning screen when you sign in (step 7).
+✅ Publishing status says **In production**.
 
-## 6. Create the OAuth client
+**Why it matters:** while an app is in "Testing", Google expires every sign-in
+after 7 days, and your calendar would stop updating every week. You do **not**
+need to "Submit for verification". An unverified app is fine for your own
+use; it just shows a warning screen when you sign in (step 6).
 
-**Google Auth Platform → Clients → Create client**:
+If **Publish app** is greyed out, the Branding links from step 3 are missing or
+weren't saved. Go back, fill them in, and click **Save**.
 
-1. Application type: **Desktop app**. Name: `gcalcli`.
-2. Click **Create**.
-3. Keep the dialog open. It shows the **Client ID** and the **Client secret**,
-   and the secret is shown only this once. You can also download the JSON.
+## Step 5: Create your key pair (Client ID and secret)
 
-Don't share the secret or paste it anywhere else.
+1. In the left sidebar, open **Clients**, then click **+ Create client**.
+2. **Application type:** **Desktop app**.
+3. **Name:** `Google Calendar for Omarchy`. This is only shown to you.
+4. Click **Create**.
+5. A dialog shows your **Client ID** and **Client secret**. Click
+   **Download JSON**, or keep the dialog open for the next step. **Google shows
+   the secret only this once.**
 
-## 7. Sign in with gcalcli
+🔒 Treat the secret like a password. Don't post it, screenshot it, or paste it
+anywhere except the next step.
 
-In a terminal:
+## Step 6: Sign in once
+
+Open a terminal and run:
 
 ```bash
 gcalcli init
 ```
 
-1. Paste the **Client ID**, then the **Client secret**.
-2. A browser tab opens. Pick your account.
-3. Google says **"Google hasn't verified this app"**. That's expected for your
-   own client. Click **Advanced → Go to gcalcli (unsafe)**.
-4. Click **Continue** to allow calendar access.
-5. The terminal says the credentials loaded. Check it worked:
+1. When it asks for the **Client ID**, paste it and press Enter.
+2. When it asks for the **Client secret**, paste it and press Enter.
+3. A browser tab opens. Choose your Google account.
+4. You'll see **"Google hasn't verified this app."** That's expected: it's your
+   own app. Click **Advanced**, then **Go to Google Calendar for Omarchy
+   (unsafe)**.
+5. Google lists what the app may do (see and edit your calendars). Click
+   **Continue**.
+6. The browser says you can close the window. The terminal says
+   `Successfully loaded credentials`.
 
-   ```bash
-   gcalcli list
-   ```
+✅ Check it worked:
 
-Your calendars should be listed. Now go back to the install steps in the
-[README](README.md).
+```bash
+gcalcli list
+```
+
+You should see your calendars listed. **You're done with Google.** Go back to
+the [install steps in the README](README.md#install).
+
+---
 
 ## If something goes wrong
 
-| What you see | Fix |
+| What you see | What to do |
 |---|---|
-| "Access blocked: gcalcli has not completed the Google verification process" (Error 403 access_denied) | The app is still in **Testing**. Do steps 4 and 5, then run `gcalcli init` again. |
-| **Publish app** is greyed out | Branding is missing the homepage, privacy link or authorized domain (step 4). Fill them in and **Save**. |
-| The login worked, but stops after a week | It was made while the app was in Testing. Publish it (step 5), then run `gcalcli init` again. |
-| `calsync-doctor` says auth failed | Access was revoked or the password changed. Run `gcalcli init` again. |
-| Lost the client secret | **Clients → your client**: add a new secret (or make a new Desktop client), then run `gcalcli init` again. |
+| **"Access blocked: … has not completed the Google verification process"** (Error 403: access_denied) | The app is still in Testing. Do step 4 (Publish), then run `gcalcli init` again. |
+| **Publish app** is greyed out | The homepage, privacy link or authorized domain from step 3 is missing or unsaved. Fill them in and click **Save**. |
+| The calendar worked, then stopped about a week later | Your sign-in was made while the app was in Testing. Publish it (step 4), then run `gcalcli init` again. |
+| `gcalcli init` doesn't open a browser | Copy the long `https://accounts.google.com/...` link it prints into your browser. |
+| You lost the Client secret | **Clients** → your client → **Add secret** (or create a new Desktop client), then run `gcalcli init` again. |
+| `calsync-doctor` says the login failed | Access was removed or your password changed. Run `gcalcli init` again. |
+| Google says the app name isn't allowed | Use a different name, e.g. `Calendar for Omarchy`. Only you see it. |
+
+## Hosting your own pages
+
+Optional. Instead of the project's homepage and privacy page, you can publish
+your own with GitHub Pages:
+
+1. Create a public repository with an `index.html` (one line saying what the
+   app is) and a `privacy.html`. You can copy and edit
+   [docs/privacy.html](docs/privacy.html).
+2. In that repository: **Settings → Pages**, source **main** branch, then
+   **Save**.
+3. In step 3, use your own `https://<you>.github.io/<repo>/` links and
+   authorized domain `<you>.github.io`.

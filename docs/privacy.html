@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy policy · Google Calendar for Omarchy</title>
+<style>
+  :root { --bg: #f7f7f5; --fg: #1d1f21; --muted: #5c6166; --accent: #2f7d5b; --line: #e2e2de; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111315; --fg: #e6e6e3; --muted: #9aa0a6; --accent: #6fd3a3; --line: #2b2f33; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 30px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 32px 0 8px; }
+  p.meta { color: var(--muted); margin: 0 0 24px; }
+  a { color: var(--accent); }
+  li { margin: 6px 0; }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Privacy policy</h1>
+  <p class="meta">Google Calendar for Omarchy · Last updated 1 October 2026</p>
+
+  <p>Google Calendar for Omarchy is open-source software that shows your Google Calendar in the bar of the Omarchy Linux desktop. It runs entirely on your own computer.</p>
+
+  <h2>Whose app is it?</h2>
+  <p>Each person who uses this software creates their <strong>own private Google OAuth client</strong>, in their own Google Cloud account, and signs in with it. There is no central server and no shared app, and the author never receives your data or your login.</p>
+
+  <h2>What data is used, and for what</h2>
+  <ul>
+    <li>The software reads your calendars and events (titles, times, locations, reminders, meeting links and calendar colors) to show them on your desktop.</li>
+    <li>It creates events only when you add one yourself.</li>
+    <li>It does not delete or change existing events.</li>
+  </ul>
+
+  <h2>Where your data goes</h2>
+  <ul>
+    <li>Calendar data travels only between your computer and Google's Calendar API.</li>
+    <li>A short-term copy (about 7 days back and 45 days ahead) is cached on your own computer, in <code>~/.local/state/calsync/</code>. Your sign-in token is stored by gcalcli in <code>~/.local/share/gcalcli/</code>, readable only by your user.</li>
+    <li>Nothing is sent to the author or any other third party. There is no analytics or tracking.</li>
+  </ul>
+
+  <h2>Removing access</h2>
+  <p>Revoke access at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>. Uninstalling the software (<code>install.sh --uninstall</code>) and deleting the two folders above removes everything from your computer.</p>
+
+  <h2>Google API Services User Data Policy</h2>
+  <p>Use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+  <h2>Contact</h2>
+  <p>Questions: open an issue at <a href="https://github.com/dawestheperson/omarchy-google-calendar/issues">github.com/dawestheperson/omarchy-google-calendar</a>.</p>
+
+  <footer><a href="./">Google Calendar for Omarchy</a> · Not affiliated with Google or Omarchy.</footer>
+</main>
+</body>
+</html>

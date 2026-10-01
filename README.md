@@ -4,6 +4,9 @@ Your Google Calendar in the [Omarchy](https://omarchy.org) bar. Omarchy's
 clock stays where it was, with your next event in front of it. Click it for
 your calendar.
 
+**[Homepage](https://dawestheperson.github.io/omarchy-google-calendar/)** ·
+**[Install](#install)** · **[Connect your Google account (step by step)](GOOGLE_SETUP.md)**
+
 ![The bar: the next event and a countdown in front of the clock](screenshots/bar.png)
 
 <p>
@@ -39,8 +42,9 @@ The screenshots use made-up events.
 
 - Omarchy 4 (tested on 4.0.4)
 - [gcalcli](https://github.com/insanum/gcalcli), from the AUR
-- Your own Google Cloud OAuth client. This is free and takes about 20 minutes,
-  once. Google requires it for any personal app that reads your calendar.
+- A free, private Google "app" in your own Google account, so the plugin may
+  read your calendar. It takes about 20 minutes, once, and
+  **[GOOGLE_SETUP.md](GOOGLE_SETUP.md) walks through every click**.
 
 ## Install
 
@@ -48,7 +52,7 @@ The screenshots use made-up events.
 # 1. gcalcli
 omarchy pkg aur add gcalcli
 
-# 2. Your Google OAuth client: follow GOOGLE_SETUP.md, then sign in
+# 2. Connect your Google account: follow GOOGLE_SETUP.md, which ends with
 gcalcli init
 
 # 3. The plugin, then its setup (sync, timers, swapping out the stock clock)
